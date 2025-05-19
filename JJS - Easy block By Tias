@@ -1,0 +1,220 @@
+-- Services
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local Workspace = game:GetService("Workspace")
+
+-- Player Setup
+local lp = Players.LocalPlayer
+local cam = Workspace.CurrentCamera
+local hrp = nil
+local humanoid = nil
+
+-- State
+local predictionTime = 0.5
+local holdingF = false
+local scriptActive = false
+local target = nil
+local targetHead = nil
+local lastPositions = {}
+local permanentlyDisabled = false
+local aimCamera = false
+local aimStartTime = 0
+local aimDuration = 1
+local aimRange = 100
+local guiVisible = true
+
+-- Character Reference
+local function updateCharacterReferences()
+	local char = lp.Character
+	if not char then return end
+	hrp = char:WaitForChild("HumanoidRootPart", 5)
+	humanoid = char:WaitForChild("Humanoid", 5)
+	if holdingF and humanoid and scriptActive and target then
+		humanoid.AutoRotate = false
+	else
+		if humanoid then humanoid.AutoRotate = true end
+	end
+end
+
+lp.CharacterAdded:Connect(function()
+	updateCharacterReferences()
+end)
+if lp.Character then updateCharacterReferences() end
+
+-- Target Finder
+local function getClosestPlayerToCenter()
+	local closest = nil
+	local shortest = math.huge
+	for _, player in pairs(Players:GetPlayers()) do
+		if player ~= lp and player.Character and player.Character:FindFirstChild("HumanoidRootPart") then
+			local pos, onScreen = cam:WorldToViewportPoint(player.Character.HumanoidRootPart.Position)
+			if onScreen then
+				local center = Vector2.new(cam.ViewportSize.X / 2, cam.ViewportSize.Y / 2)
+				local dist = (Vector2.new(pos.X, pos.Y) - center).Magnitude
+				if dist < shortest then
+					shortest = dist
+					closest = player
+				end
+			end
+		end
+	end
+	return closest
+end
+
+-- Camera Lock Trigger
+local function startCameraAim()
+	if not targetHead or not cam then return end
+	aimCamera = true
+	aimStartTime = tick()
+end
+
+-- Reset Target
+local function resetTarget()
+	target = nil
+	targetHead = nil
+	if humanoid then
+		humanoid.AutoRotate = true
+	end
+end
+
+-- Input Events
+UserInputService.InputBegan:Connect(function(input)
+	if permanentlyDisabled then return end
+
+	if input.KeyCode == Enum.KeyCode.F then
+		holdingF = true
+		if humanoid and scriptActive and target then
+			humanoid.AutoRotate = false
+		end
+	elseif input.KeyCode == Enum.KeyCode.C then
+		if scriptActive then
+			scriptActive = false
+			resetTarget()
+		else
+			local selected = getClosestPlayerToCenter()
+			if selected and selected.Character and selected.Character:FindFirstChild("HumanoidRootPart") then
+				target = selected
+				targetHead = selected.Character:FindFirstChild("Head")
+				scriptActive = true
+				if humanoid and holdingF then humanoid.AutoRotate = false end
+			end
+		end
+	elseif input.KeyCode == Enum.KeyCode.LeftAlt then
+		permanentlyDisabled = true
+		scriptActive = false
+		resetTarget()
+		if humanoid then humanoid.AutoRotate = true end
+		if lp:FindFirstChild("PlayerGui"):FindFirstChild("PredictionGUI") then
+			lp.PlayerGui.PredictionGUI.Enabled = false
+		end
+	elseif input.KeyCode == Enum.KeyCode.V then
+		guiVisible = not guiVisible
+		if lp:FindFirstChild("PlayerGui"):FindFirstChild("PredictionGUI") then
+			lp.PlayerGui.PredictionGUI.Enabled = guiVisible
+		end
+	end
+end)
+
+UserInputService.InputEnded:Connect(function(input)
+	if input.KeyCode == Enum.KeyCode.F then
+		holdingF = false
+		if humanoid then humanoid.AutoRotate = true end
+		if scriptActive and target and target.Character and target.Character:FindFirstChild("HumanoidRootPart") then
+			local targetPos = target.Character.HumanoidRootPart.Position
+			if hrp and (targetPos - hrp.Position).Magnitude <= aimRange then
+				startCameraAim()
+			end
+		end
+	end
+end)
+
+-- Core Loop
+RunService.RenderStepped:Connect(function(dt)
+	if permanentlyDisabled then return end
+
+	if humanoid then
+		humanoid.AutoRotate = not (holdingF and scriptActive and target)
+	end
+
+	-- Camera aim logic
+	if aimCamera and target and target.Character and target.Character:FindFirstChild("Head") then
+		local targetPos = target.Character.HumanoidRootPart.Position
+		if hrp and (targetPos - hrp.Position).Magnitude <= aimRange then
+			if tick() - aimStartTime <= aimDuration then
+				cam.CFrame = CFrame.new(cam.CFrame.Position, target.Character.Head.Position)
+			else
+				aimCamera = false
+			end
+		else
+			aimCamera = false
+		end
+	end
+
+	-- Auto rotate logic
+	if not scriptActive or not target or not target.Character or not hrp then return end
+	if not target.Character:FindFirstChild("HumanoidRootPart") then return end
+
+	if holdingF then
+		local targetHRP = target.Character.HumanoidRootPart
+		local currentPos = targetHRP.Position
+		local lastPos = lastPositions[target] or currentPos
+		local velocity = (currentPos - lastPos) / math.max(dt, 1/60)
+		lastPositions[target] = currentPos
+
+		local predictedPos = currentPos + velocity * predictionTime
+		local direction = (predictedPos - hrp.Position).Unit
+		local lookVector = Vector3.new(direction.X, 0, direction.Z)
+		hrp.CFrame = CFrame.new(hrp.Position, hrp.Position + lookVector)
+	end
+end)
+
+-- GUI Setup
+local gui = Instance.new("ScreenGui")
+gui.Name = "PredictionGUI"
+gui.ResetOnSpawn = false
+gui.Parent = lp:WaitForChild("PlayerGui")
+
+local frame = Instance.new("Frame")
+frame.Size = UDim2.new(0, 280, 0, 200)
+frame.Position = UDim2.new(0, 10, 0.5, -100)
+frame.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
+frame.BorderSizePixel = 0
+frame.BackgroundTransparency = 0.1
+frame.Parent = gui
+
+local box = Instance.new("TextBox")
+box.Size = UDim2.new(1, -20, 0, 30)
+box.Position = UDim2.new(0, 10, 0, 10)
+box.PlaceholderText = "Prediction Strength (default: 0.3)"
+box.Text = tostring(predictionTime)
+box.TextColor3 = Color3.new(1, 1, 1)
+box.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+box.ClearTextOnFocus = false
+box.Parent = frame
+
+box.FocusLost:Connect(function()
+	local num = tonumber(box.Text)
+	if num then predictionTime = num end
+end)
+
+local label = Instance.new("TextLabel")
+label.Size = UDim2.new(1, -20, 0, 150)
+label.Position = UDim2.new(0, 10, 0, 50)
+label.TextWrapped = true
+label.TextXAlignment = Enum.TextXAlignment.Left
+label.TextYAlignment = Enum.TextYAlignment.Top
+label.Font = Enum.Font.Gotham
+label.TextSize = 14
+label.TextColor3 = Color3.new(1, 1, 1)
+label.BackgroundTransparency = 1
+label.Text = [[
+Easy Block by Apar.
+Set prediction strength (default 0.5).
+Press V to hide/show this GUI.
+Press Left Alt to disable this script.
+Look at the player closest to screen center, press C to lock.
+Hold F to activate auto-rotation.
+Camera lock will occur for 4s after releasing F, only if target is within 10 studs.
+]]
+label.Parent = frame
