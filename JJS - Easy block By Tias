@@ -215,6 +215,6 @@ Press V to hide/show this GUI.
 Press Left Alt to disable this script.
 Look at the player closest to screen center, press C to lock.
 Hold F to activate auto-rotation.
-Camera lock will occur for 4s after releasing F, only if target is within 10 studs.
+Camera lock will occur for 1s after releasing F, only if target is within 100 studs.
 ]]
 label.Parent = frame
